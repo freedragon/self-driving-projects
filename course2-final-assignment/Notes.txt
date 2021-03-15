@@ -1,0 +1,59 @@
+https://www.coursera.org/learn/state-estimation-localization-self-driving-cars/discussions/weeks/5/threads/h_sBUI04SZ-7AVCNOGmfsg
+
+it was defined as
+
+p_cov[0] = np.zeros(9)  # covariance of estimate
+
+in main loop, p_cov_ba is defined as 
+
+F = np.eye(9) 
+
+    F[0:3, 3:6] = delta_t*np.eye(3) 
+
+    #F[3:6, 6:9] = -skew_symmetric(C.dot(f))*delta_t 
+
+    F[3:6, 6:9] = -C.dot(skew_symmetric(f.reshape(3,1)))*delta_t 
+
+    L = np.zeros((9, 6)) 
+
+    L[np.arange(3,6), np.arange(3)] = 1 
+
+    L[np.arange(6,9), np.arange(3,6)] = 1 
+
+    Q = np.eye(6)  
+
+    Q[np.arange(0,3), np.arange(0,3)] = var_imu_f 
+
+    Q[np.arange(3,6), np.arange(3,6)] = var_imu_w 
+
+ Q = Q*delta_t**2 
+
+    p_c_ba = F@p_c@F.T + L@Q@L.T
+
+in measurement update, delta_x is defined as 
+
+ 
+
+  H = np.zeros((3, 9)) 
+
+    H[np.arange(0,3), np.arange(0,3)]=1 
+
+    R = np.zeros((3,3)) 
+
+    R[np.arange(3), np.arange(3)]=sensor_var 
+
+    # 3.1 Compute Kalman Gain 
+
+    K_k = p_cov_check@H.T@np.linalg.inv(H@p_cov_check@H.T+R) 
+
+    # 3.2 Compute error state 
+
+    delta_x = K_k@(y_k-p_check)
+
+https://www.coursera.org/learn/state-estimation-localization-self-driving-cars/discussions/forums/YgBuiuENEeivow4ZZHuOLg/threads/k7ao3Je_EemUHQpwYVpdQg
+
+q_v and q_w are the two elements returned by the q(theta) function, respectively. q_w is scalar and q_v is a vector of dimension 3x1 (same as imf_w)
+The cross means to use the skew_symmetric function on the vector. I'm still not sure about [] vs {} and I've also seen some places in the forum that the C_ns multiplication may be misleading?
+Reviewing the lecture again, it looks like the Omega function is encapsulating the quaternion multiplication, which we shouldn't need to worry about since we have a function defined for it.
+The 0 elements are 3x3 matrices of 0's and the 1's are 3x3 identity matrices in F and L
+
