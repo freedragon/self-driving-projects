@@ -47,6 +47,7 @@ imu_w = data['imu_w']
 gnss = data['gnss']
 lidar = data['lidar']
 
+
 ################################################################################################
 # Let's plot the ground truth trajectory to see what it looks like. When you're testing your
 # code later, feel free to comment this out.
@@ -120,6 +121,27 @@ v_est = np.zeros([imu_f.data.shape[0], 3])  # velocity estimates
 q_est = np.zeros([imu_f.data.shape[0], 4])  # orientation estimates as quaternions
 p_cov = np.zeros([imu_f.data.shape[0], 9, 9])  # covariance matrices at each timestep
 
+"""
+print("imu_f.data.shape={}, imu_f ={}".format(imu_f.data.shape, imu_f.data))
+print("imu_w.data.shape={}, imu_w ={}".format(imu_w.data.shape, imu_w.data))
+
+imu_f.data.shape=(10918, 3), imu_f =[[-0.01996148  0.03136036  9.78135591]
+ [-0.01986699  0.03743271  9.79679338]
+ [ 0.01269854 -0.02131687  9.81265361]
+ ...
+ [-1.32458701  0.35196761  9.73522034]
+ [-0.47210374 -0.42987602  9.76335312]
+ [-1.31729961  0.29819817  9.76891354]]
+
+imu_w.data.shape=(10918, 3), imu_w =[[-0.00247717 -0.06861742  0.08961386]
+ [ 0.07273628 -0.09301396 -0.00066071]
+ [-0.10360542  0.08574767  0.17110002]
+ ...
+ [-0.04458079 -0.16362213  0.22095907]
+ [ 0.02434176 -0.04469063  0.09584127]
+ [ 0.02098754  0.00651628  0.1481445 ]]
+"""
+
 # Set initial values.
 p_est[0] = gt.p[0]
 v_est[0] = gt.v[0]
@@ -135,13 +157,31 @@ lidar_i = 0
 # a function for it.
 ################################################################################################
 def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
+    # Forwards Sensor Model
+    m_dist = np.sqrt(p_check[0] ** 2 + p_check[1] ** 2 + p_check[2] ** 2)
+    # m_updated = np.array([rnge, azim, elev])
+    m_updated = np.array([m_dist, np.artctan2(p_check[1], p_check[0]), np.arcsin(p_check[2]. m_dist)])
+ 
+    H_k = np.array([1, 0, 0])
+
     # 3.1 Compute Kalman Gain
-
+    # K_k is of shape (9,3) - which works out since the shapes of the respective variables are:
+    # p_cov_check = (9,9); h_jac = (3,9); sensor_var = (3,3), so that works out correctly, like so (here @ is the dot product):
+    # [9,9]@[9,3]@inv([3,9]@[9,9]@[9,3] - [3,3]) = [9,9]@[9,3]@inv([3,3] - [3,3]) = [9,9]@[9,3] = [9,3]
+    K_k = P_hat.dot(H_k.T).dot(np.linalg.inv(H_k.dot(P_hat).dot(H_k.T) + R_k))
+ 
     # 3.2 Compute error state
-
+    # [9,3]@[(3,)-(3,)] = [(9,)]
+    delta_xk = K_k.dot(y_k - P_hat)
+ 
     # 3.3 Correct predicted state
-
+    p_check += delta_xk
+    v_check += delta_xk
+    q_check += delta_xk
+ 
     # 3.4 Compute corrected covariance
+    # ([9,9] - [9,3]@[3,9])@[9,9] = ([9,9] - [9,9])@[9,9] = [9,9]
+    P_k = (np.eye(10) - K_k.dot(H_k)).dot(P_k)
 
     return p_hat, v_hat, q_hat, p_cov_hat
 
@@ -155,14 +195,55 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     delta_t = imu_f.t[k] - imu_f.t[k - 1]
 
     # 1. Update state with IMU inputs
+    u_k = np.array([imu_f.data[k], imu_w.data[k]])  # dim() = 6
+    print("u_k = {}".format(u_k))
 
+    # - Update Position, Velocity, Orientation respectively.
+    Q = Quaternion(w=q_est[k-1,0], x=q_est[k-1,1], y=q_est[k-1,2], z=q_est[k-1,3])
+    c_term = Q.to_mat().dot(imu_f.data[k - 1]) + g
+    print("Q_est={},\n mat={},\n iumu_f[k-1]={}".format(Q, Q.to_mat(),imu_f.data[k - 1]))
+    print("c_term = {}".format(c_term))
+
+    p_est[k] = p_est[k-1] + delta_t * v_est[k-1] + ((delta_t ** 2) / 2) * c_term
+    v_est[k] = v_est[k-1] + delta_t * c_term
+
+    q_wkm1dt = Quaternion(axis_angle=(imu_w.data[k-1] * delta_t))
+    v = np.array([q_wkm1dt.x, q_wkm1dt.y, q_wkm1dt.z]).reshape(3,1)
+    cross = -skew_symmetric(v)
+
+    Omega = q_wkm1dt.w * np.eye(4) # + np.array([[0, 0, ], [0, 0, ], [], []])
+    q_est[k] = Q.quat_mult_right(Omega)
+ 
     # 1.1 Linearize the motion model and compute Jacobians
-
+    F_km1 = np.zeros(9)
+    F_km1[0:3, 3:6] = delta_t * np.eye(3)
+    # F_km1[3:,2] =  delta_t * -Q.to_mat().dot(imu_f.data[k - 1])
+    F_km1[3:6, 6:9] = -C.dot(skew_symmetric(f.reshape(3,1)))*delta_t
+    L_km1 = np.array([[0, 0, 0, 0, 0, 0], \
+                      [0, 0, 0, 0, 0, 0], \
+                      [0, 0, 0, 0, 0, 0], \
+                      [1, 0, 0, 0, 0, 0], \
+                      [0, 1, 0, 0, 0, 0], \
+                      [0, 0, 1, 0, 0, 0], \
+                      [0, 0, 0, 1, 0, 0], \
+                      [0, 0, 0, 0, 1, 0], \
+                      [0, 0, 0, 0, 0, 1]])
+    m_km1 = np.array([0, 0])
+ 
     # 2. Propagate uncertainty
-
+    P_hat = F_km1.dot(p_est[k-1]).dot(F_km1.T) + L_km1.dot(Q_km1).dot(L_km1.T)
+ 
     # 3. Check availability of GNSS and LIDAR measurements
+    # Find matching elements with time t for imu_f.
+    cur_t = imu_f.t[k]
+    gidx = np.where(gnss.t == cur_t)[0]
+    lidx = np.where(lidar.t == cur_t)[0]
+ 
+    # if gnss idx or lidar idx has integer value larger than 0, it means measurement are available.
+    if (gidx > 0 or lidx > 0):
+        p_hat, v_hat, q_hat, p_cov_hat = measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check)
 
-    # Update states (save)
+# q_hat=Quaternion(*q_check).quat_mult_right(Quaternion(axis_angle=angle_normalize(delta_x[6:9])))
 
 #### 6. Results and Analysis ###################################################################
 
