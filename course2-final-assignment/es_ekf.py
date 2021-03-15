@@ -157,31 +157,36 @@ lidar_i = 0
 # a function for it.
 ################################################################################################
 def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
+
     # Forwards Sensor Model
-    m_dist = np.sqrt(p_check[0] ** 2 + p_check[1] ** 2 + p_check[2] ** 2)
-    # m_updated = np.array([rnge, azim, elev])
-    m_updated = np.array([m_dist, np.artctan2(p_check[1], p_check[0]), np.arcsin(p_check[2]. m_dist)])
+    # m_dist = np.sqrt(p_check[0] ** 2 + p_check[1] ** 2 + p_check[2] ** 2)
+    # # m_updated = np.array([rnge, azim, elev])
+    # m_updated = np.array([m_dist, np.artctan2(p_check[1], p_check[0]), np.arcsin(p_check[2]. m_dist)])
  
-    H_k = np.array([1, 0, 0])
+    H_k = np.zeros((3, 9))
+    H_k[np.arange(0,3), np.arange(0,3)]=1
+
+    R_k = np.zeros((3,3))
+    R_k[np.arange(3), np.arange(3)] = sensor_var
 
     # 3.1 Compute Kalman Gain
     # K_k is of shape (9,3) - which works out since the shapes of the respective variables are:
     # p_cov_check = (9,9); h_jac = (3,9); sensor_var = (3,3), so that works out correctly, like so (here @ is the dot product):
     # [9,9]@[9,3]@inv([3,9]@[9,9]@[9,3] - [3,3]) = [9,9]@[9,3]@inv([3,3] - [3,3]) = [9,9]@[9,3] = [9,3]
-    K_k = P_hat.dot(H_k.T).dot(np.linalg.inv(H_k.dot(P_hat).dot(H_k.T) + R_k))
- 
+    K_k = p_cov_check @ H_k.T @ np.linalg.inv(H_k @ p_cov_check @ H_k.T + R_k)
+
     # 3.2 Compute error state
     # [9,3]@[(3,)-(3,)] = [(9,)]
-    delta_xk = K_k.dot(y_k - P_hat)
+    delta_xk = K_k.dot(y_k - p_check)
  
     # 3.3 Correct predicted state
-    p_check += delta_xk
-    v_check += delta_xk
-    q_check += delta_xk
+    p_hat = p_check + delta_xk[0:3]
+    v_hat = v_check + delta_xk[3:6]
+    q_hat = Quaternion(axis_angle=delta_xk[6:]).quat_mult_left(Quaternion(*q_check))
  
     # 3.4 Compute corrected covariance
     # ([9,9] - [9,3]@[3,9])@[9,9] = ([9,9] - [9,9])@[9,9] = [9,9]
-    P_k = (np.eye(10) - K_k.dot(H_k)).dot(P_k)
+    p_cov_hat = (np.eye(9) - (K_k @ H_k)) @ p_cov_check
 
     return p_hat, v_hat, q_hat, p_cov_hat
 
@@ -195,53 +200,63 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     delta_t = imu_f.t[k] - imu_f.t[k - 1]
 
     # 1. Update state with IMU inputs
-    u_k = np.array([imu_f.data[k], imu_w.data[k]])  # dim() = 6
-    print("u_k = {}".format(u_k))
 
     # - Update Position, Velocity, Orientation respectively.
-    Q = Quaternion(w=q_est[k-1,0], x=q_est[k-1,1], y=q_est[k-1,2], z=q_est[k-1,3])
-    c_term = Q.to_mat().dot(imu_f.data[k - 1]) + g
-    print("Q_est={},\n mat={},\n iumu_f[k-1]={}".format(Q, Q.to_mat(),imu_f.data[k - 1]))
-    print("c_term = {}".format(c_term))
+    C_ns = Quaternion(*q_est[k-1]).to_mat() # * unpacks tuple in to numbers during function call 
+    c_term = C_ns @ imu_f.data[k - 1] + g
+    # print("Q_est={},\n mat={},\n iumu_f[k-1]={}".format(Q, Q.to_mat(),imu_f.data[k - 1]))
+    # print("c_term = {}".format(c_term))
 
-    p_est[k] = p_est[k-1] + delta_t * v_est[k-1] + ((delta_t ** 2) / 2) * c_term
-    v_est[k] = v_est[k-1] + delta_t * c_term
+    p_check = p_est[k-1] + delta_t * v_est[k-1] + ((delta_t ** 2) / 2) * c_term
+    v_check = v_est[k-1] + delta_t * c_term
 
-    q_wkm1dt = Quaternion(axis_angle=(imu_w.data[k-1] * delta_t))
-    v = np.array([q_wkm1dt.x, q_wkm1dt.y, q_wkm1dt.z]).reshape(3,1)
-    cross = -skew_symmetric(v)
+    # q_o = Quaternion(axis_angle=(imu_w.data[k-1] * delta_t))
+    # aq_v = np.array([q_o.x, q_o.y, q_o.z]).reshape(3,1)
+    # q_v_ss = skew_symmetric(aq_v)
+    # Omega = q_o.w * np.eye(4) # + np.array([[0, 0, ], [0, 0, ], [], []])
+    # print("aq_v={},\n q_v_ss={}".format(aq_v, q_v_ss))
 
-    Omega = q_wkm1dt.w * np.eye(4) # + np.array([[0, 0, ], [0, 0, ], [], []])
-    q_est[k] = Q.quat_mult_right(Omega)
+    # Omega(q(w_k-1 * delta_t)) (X) q_k-1
+    q_check = Quaternion(*q_est[k-1]).quat_mult_right(Quaternion(axis_angle=(imu_w.data[k-1] * delta_t)))
  
     # 1.1 Linearize the motion model and compute Jacobians
-    F_km1 = np.zeros(9)
+    F_km1 = np.zeros((9,9))
     F_km1[0:3, 3:6] = delta_t * np.eye(3)
-    # F_km1[3:,2] =  delta_t * -Q.to_mat().dot(imu_f.data[k - 1])
-    F_km1[3:6, 6:9] = -C.dot(skew_symmetric(f.reshape(3,1)))*delta_t
-    L_km1 = np.array([[0, 0, 0, 0, 0, 0], \
-                      [0, 0, 0, 0, 0, 0], \
-                      [0, 0, 0, 0, 0, 0], \
-                      [1, 0, 0, 0, 0, 0], \
-                      [0, 1, 0, 0, 0, 0], \
-                      [0, 0, 1, 0, 0, 0], \
-                      [0, 0, 0, 1, 0, 0], \
-                      [0, 0, 0, 0, 1, 0], \
-                      [0, 0, 0, 0, 0, 1]])
-    m_km1 = np.array([0, 0])
+    F_km1[3:6, 6:9] = -C_ns.dot(skew_symmetric(imu_f.data[k-1].reshape(3,1)))*delta_t
+
+    L_km1 = np.zeros((9, 6))
+    L_km1[np.arange(3,6), np.arange(3)] = 1
+    L_km1[np.arange(6,9), np.arange(3,6)] = 1
+
+    Q_k = np.eye(6)
+    Q_k[np.arange(0,3), np.arange(0,3)] = var_imu_f
+    Q_k[np.arange(3,6), np.arange(3,6)] = var_imu_w
+    Q_k = Q_k * (delta_t**2)
  
     # 2. Propagate uncertainty
-    P_hat = F_km1.dot(p_est[k-1]).dot(F_km1.T) + L_km1.dot(Q_km1).dot(L_km1.T)
+    # Error State
+    p_cov_check = F_km1.dot(p_cov[k-1]).dot(F_km1.T) + L_km1.dot(Q_k).dot(L_km1.T)
  
     # 3. Check availability of GNSS and LIDAR measurements
     # Find matching elements with time t for imu_f.
     cur_t = imu_f.t[k]
-    gidx = np.where(gnss.t == cur_t)[0]
-    lidx = np.where(lidar.t == cur_t)[0]
- 
+    gnss_data = np.where(gnss.t == cur_t)[0]
+    lidar_data = np.where(lidar.t == cur_t)[0]
+    # print("gnss_data = {}, lidar_data = {}".format(gnss_data,lidar_data))
+
     # if gnss idx or lidar idx has integer value larger than 0, it means measurement are available.
-    if (gidx > 0 or lidx > 0):
-        p_hat, v_hat, q_hat, p_cov_hat = measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check)
+    if (len(gnss_data) > 0):
+        y_k = p_check + (var_gnss ** 2)
+        p_check, v_check, q_check, p_cov_check = measurement_update(var_gnss, p_cov_check, y_k, p_check, v_check, q_check)
+    if (len(lidar_data) > 0):
+        y_k = p_check + (var_lidar ** 2)
+        p_check, v_check, q_check, p_cov_check = measurement_update(var_lidar, p_cov_check, y_k, p_check, v_check, q_check)
+
+    # Store current state
+    p_est[k] = p_check
+    v_est[k] = v_check
+    q_est[k] = Quaternion(*q_check).to_numpy()
+    p_cov[k] = p_cov_check
 
 # q_hat=Quaternion(*q_check).quat_mult_right(Quaternion(axis_angle=angle_normalize(delta_x[6:9])))
 
