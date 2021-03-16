@@ -168,12 +168,14 @@ def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
 
     R_k = np.zeros((3,3))
     R_k[np.arange(3), np.arange(3)] = sensor_var
+    # R_k = np.eye(3) * sensor_var
 
     # 3.1 Compute Kalman Gain
     # K_k is of shape (9,3) - which works out since the shapes of the respective variables are:
     # p_cov_check = (9,9); h_jac = (3,9); sensor_var = (3,3), so that works out correctly, like so (here @ is the dot product):
     # [9,9]@[9,3]@inv([3,9]@[9,9]@[9,3] - [3,3]) = [9,9]@[9,3]@inv([3,3] - [3,3]) = [9,9]@[9,3] = [9,3]
     K_k = p_cov_check @ H_k.T @ np.linalg.inv(H_k @ p_cov_check @ H_k.T + R_k)
+    # K_k = p_cov_check @ h_jac.T @ np.linalg.inv(h_jac @ p_cov_check @ h_jac.T + R_k)
 
     # 3.2 Compute error state
     # [9,3]@[(3,)-(3,)] = [(9,)]
@@ -182,11 +184,12 @@ def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
     # 3.3 Correct predicted state
     p_hat = p_check + delta_xk[0:3]
     v_hat = v_check + delta_xk[3:6]
-    q_hat = Quaternion(axis_angle=delta_xk[6:]).quat_mult_left(Quaternion(*q_check))
+    # q_phi = Quaternion(euler=angle_normalize(delta_xk[6:9]))
+    q_hat = Quaternion(axis_angle=angle_normalize(delta_xk[6:9])).quat_mult_left(Quaternion(*q_check))
  
     # 3.4 Compute corrected covariance
     # ([9,9] - [9,3]@[3,9])@[9,9] = ([9,9] - [9,9])@[9,9] = [9,9]
-    p_cov_hat = (np.eye(9) - (K_k @ H_k)) @ p_cov_check
+    p_cov_hat = (np.eye(9) - (K_k @ h_jac)) @ p_cov_check
 
     return p_hat, v_hat, q_hat, p_cov_hat
 
@@ -200,10 +203,9 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     delta_t = imu_f.t[k] - imu_f.t[k - 1]
 
     # 1. Update state with IMU inputs
-
     # - Update Position, Velocity, Orientation respectively.
-    C_ns = Quaternion(*q_est[k-1]).to_mat() # * unpacks tuple in to numbers during function call 
-    c_term = C_ns @ imu_f.data[k - 1] + g
+    C_ns = Quaternion(*q_est[k-1]).to_mat()
+    c_term = C_ns.dot(imu_f.data[k - 1]) - g
     # print("Q_est={},\n mat={},\n iumu_f[k-1]={}".format(Q, Q.to_mat(),imu_f.data[k - 1]))
     # print("c_term = {}".format(c_term))
 
@@ -217,12 +219,18 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     # print("aq_v={},\n q_v_ss={}".format(aq_v, q_v_ss))
 
     # Omega(q(w_k-1 * delta_t)) (X) q_k-1
-    q_check = Quaternion(*q_est[k-1]).quat_mult_right(Quaternion(axis_angle=(imu_w.data[k-1] * delta_t)))
- 
+    # q_check = Quaternion(*q_est[k-1]).quat_mult_right(Quaternion(axis_angle=(imu_w.data[k-1] * delta_t)))
+    q_check = Quaternion(axis_angle=angle_normalize(imu_w.data[k-1] * delta_t)).quat_mult_right(Quaternion(*q_est[k-1]))
+    q_check = angle_normalize(q_check)
+
     # 1.1 Linearize the motion model and compute Jacobians
     F_km1 = np.zeros((9,9))
+    F_km1[0:3, 0:3] = np.eye(3)
     F_km1[0:3, 3:6] = delta_t * np.eye(3)
-    F_km1[3:6, 6:9] = -C_ns.dot(skew_symmetric(imu_f.data[k-1].reshape(3,1)))*delta_t
+    F_km1[3:6, 3:6] = np.eye(3)
+    # F_km1[3:6, 6:9] = -C_ns.dot(skew_symmetric(imu_f.data[k-1].reshape(3,1)))*delta_t
+    F_km1[3:6, 6:9] = -skew_symmetric(C_ns @ imu_f.data[k-1]) * delta_t
+    F_km1[6:, 6:] = np.eye(3)
 
     L_km1 = np.zeros((9, 6))
     L_km1[np.arange(3,6), np.arange(3)] = 1
@@ -231,31 +239,44 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     Q_k = np.eye(6)
     Q_k[np.arange(0,3), np.arange(0,3)] = var_imu_f
     Q_k[np.arange(3,6), np.arange(3,6)] = var_imu_w
+    # Q_k[np.arange(0,3), np.arange(0,3)] = var_imu_f ** 2
+    # Q_k[np.arange(3,6), np.arange(3,6)] = var_imu_w ** 2
     Q_k = Q_k * (delta_t**2)
  
     # 2. Propagate uncertainty
     # Error State
-    p_cov_check = F_km1.dot(p_cov[k-1]).dot(F_km1.T) + L_km1.dot(Q_k).dot(L_km1.T)
+    # p_cov_check = F_km1.dot(p_cov[k-1]).dot(F_km1.T) + L_km1.dot(Q_k).dot(L_km1.T)
+    p_cov_check = F_km1 @ p_cov[k-1] @ F_km1.T + l_jac @ Q_k @ l_jac.T
  
     # 3. Check availability of GNSS and LIDAR measurements
     # Find matching elements with time t for imu_f.
     cur_t = imu_f.t[k]
     gnss_data = np.where(gnss.t == cur_t)[0]
     lidar_data = np.where(lidar.t == cur_t)[0]
-    # print("gnss_data = {}, lidar_data = {}".format(gnss_data,lidar_data))
 
+    # if (len(gnss_data) > 0 or len(lidar_data) > 0):
+    #     print("gnss_data = {}, lidar_data = {}".format(gnss_data,lidar_data))
+
+    print("p_check[{}] = {}".format(k, p_check))
     # if gnss idx or lidar idx has integer value larger than 0, it means measurement are available.
     if (len(gnss_data) > 0):
-        y_k = p_check + (var_gnss ** 2)
+        # y_k = gnss.data[gnss_data[0]] + (var_gnss ** 2)
+        y_k = gnss.data[gnss_data[0]] + var_gnss
+        print("gnss[{}] = {},{}".format(gnss_data[0], gnss.data[gnss_data[0]], y_k))
         p_check, v_check, q_check, p_cov_check = measurement_update(var_gnss, p_cov_check, y_k, p_check, v_check, q_check)
+        q_check = angle_normalize(q_check)
+
     if (len(lidar_data) > 0):
-        y_k = p_check + (var_lidar ** 2)
+        # y_k = lidar.data[lidar_data[0]] + (var_lidar ** 2)
+        y_k = lidar.data[lidar_data[0]] + var_lidar
+        print("lidar[{}] = {}, {}".format(lidar_data[0], lidar.data[lidar_data[0]], y_k))
         p_check, v_check, q_check, p_cov_check = measurement_update(var_lidar, p_cov_check, y_k, p_check, v_check, q_check)
+        q_check = angle_normalize(q_check)
 
     # Store current state
     p_est[k] = p_check
     v_est[k] = v_check
-    q_est[k] = Quaternion(*q_check).to_numpy()
+    q_est[k] = q_check
     p_cov[k] = p_cov_check
 
 # q_hat=Quaternion(*q_check).quat_mult_right(Quaternion(axis_angle=angle_normalize(delta_x[6:9])))
