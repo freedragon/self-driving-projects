@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from rotations import angle_normalize, rpy_jacobian_axis_angle, skew_symmetric, Quaternion
 
+float_formatter = "{:.3f}".format
+np.set_printoptions(formatter={'float_kind':float_formatter})
+
 #### 1. Data ###################################################################################
 
 ################################################################################################
@@ -72,18 +75,18 @@ plt.show()
 # THIS IS THE CODE YOU WILL MODIFY FOR PART 2 OF THE ASSIGNMENT.
 ################################################################################################
 # Correct calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.1).
-C_li = np.array([
-   [ 0.99376, -0.09722,  0.05466],
-   [ 0.09971,  0.99401, -0.04475],
-   [-0.04998,  0.04992,  0.9975 ]
-])
+# C_li = np.array([
+#    [ 0.99376, -0.09722,  0.05466],
+#    [ 0.09971,  0.99401, -0.04475],
+#    [-0.04998,  0.04992,  0.9975 ]
+# ])
 
 # Incorrect calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.05).
-# C_li = np.array([
-#      [ 0.9975 , -0.04742,  0.05235],
-#      [ 0.04992,  0.99763, -0.04742],
-#      [-0.04998,  0.04992,  0.9975 ]
-# ])
+C_li = np.array([
+     [ 0.9975 , -0.04742,  0.05235],
+     [ 0.04992,  0.99763, -0.04742],
+     [-0.04998,  0.04992,  0.9975 ]
+])
 
 t_i_li = np.array([0.5, 0.1, 0.5])
 
@@ -97,10 +100,20 @@ lidar.data = (C_li @ lidar.data.T).T + t_i_li
 # most important aspects of a filter is setting the estimated sensor variances correctly.
 # We set the values here.
 ################################################################################################
-var_imu_f = 0.10
-var_imu_w = 0.25
-var_gnss  = 0.01
-var_lidar = 1.00
+# Initial config
+# var_imu_f = 0.10
+# var_imu_w = 0.25
+# for Part 2
+var_imu_f = 0.6
+var_imu_w = 0.1
+
+# Initial config
+# var_gnss  = 0.01
+# var_lidar = 1.00
+
+# for Part 2
+var_gnss  = 0.0015
+var_lidar = 999.00
 
 ################################################################################################
 # We can also set up some constants that won't change for any iteration of our solver.
@@ -157,39 +170,36 @@ lidar_i = 0
 # a function for it.
 ################################################################################################
 def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
-
     # Forwards Sensor Model
-    # m_dist = np.sqrt(p_check[0] ** 2 + p_check[1] ** 2 + p_check[2] ** 2)
-    # # m_updated = np.array([rnge, azim, elev])
-    # m_updated = np.array([m_dist, np.artctan2(p_check[1], p_check[0]), np.arcsin(p_check[2]. m_dist)])
- 
-    H_k = np.zeros((3, 9))
-    H_k[np.arange(0,3), np.arange(0,3)]=1
 
-    R_k = np.zeros((3,3))
-    R_k[np.arange(3), np.arange(3)] = sensor_var
-    # R_k = np.eye(3) * sensor_var
+    # R_k = np.zeros((3,3))
+    # R_k[np.arange(3), np.arange(3)] = sensor_var
+    R_k = np.eye(3) * sensor_var
+
+    # y_k = y_k + (sensor_var ** 2)
+    y_k = y_k + sensor_var
 
     # 3.1 Compute Kalman Gain
-    # K_k is of shape (9,3) - which works out since the shapes of the respective variables are:
-    # p_cov_check = (9,9); h_jac = (3,9); sensor_var = (3,3), so that works out correctly, like so (here @ is the dot product):
-    # [9,9]@[9,3]@inv([3,9]@[9,9]@[9,3] - [3,3]) = [9,9]@[9,3]@inv([3,3] - [3,3]) = [9,9]@[9,3] = [9,3]
-    K_k = p_cov_check @ H_k.T @ np.linalg.inv(H_k @ p_cov_check @ H_k.T + R_k)
-    # K_k = p_cov_check @ h_jac.T @ np.linalg.inv(h_jac @ p_cov_check @ h_jac.T + R_k)
+    # K_k = p_cov_check @ H_k.T @ np.linalg.inv(H_k @ p_cov_check @ H_k.T + R_k)
+    K_k = p_cov_check @ h_jac.T @ np.linalg.inv(h_jac @ p_cov_check @ h_jac.T + R_k)
 
     # 3.2 Compute error state
-    # [9,3]@[(3,)-(3,)] = [(9,)]
-    delta_xk = K_k.dot(y_k - p_check)
+    delta_xk = K_k @ (y_k - p_check)
  
     # 3.3 Correct predicted state
     p_hat = p_check + delta_xk[0:3]
     v_hat = v_check + delta_xk[3:6]
-    # q_phi = Quaternion(euler=angle_normalize(delta_xk[6:9]))
-    q_hat = Quaternion(axis_angle=angle_normalize(delta_xk[6:9])).quat_mult_left(Quaternion(*q_check))
- 
+    # print("{} = {}?".format(delta_xk[6:9], angle_normalize(delta_xk[6:9])))
+    # q_hat = Quaternion(euler=angle_normalize(delta_xk[6:9])).quat_mult_left(Quaternion(*q_check))
+    # q_hat = Quaternion(*q_check).quat_mult_right(Quaternion(axis_angle=angle_normalize(delta_xk[6:9])))
+    # q_hat = Quaternion(*q_check).quat_mult_right(Quaternion(euler=angle_normalize(delta_xk[6:9])))
+    q_hat = Quaternion(euler=angle_normalize(delta_xk[6:9])).quat_mult_left(Quaternion(*q_check))
+    q_hat = Quaternion(euler=angle_normalize(Quaternion(*q_hat).to_euler())).to_numpy()
+
     # 3.4 Compute corrected covariance
-    # ([9,9] - [9,3]@[3,9])@[9,9] = ([9,9] - [9,9])@[9,9] = [9,9]
     p_cov_hat = (np.eye(9) - (K_k @ h_jac)) @ p_cov_check
+
+    # print("sensor_fusion: y_k={y}, p_check={p}, delta={d}".format(y=y_k,p=p_check,d=delta_xk[0:3]))
 
     return p_hat, v_hat, q_hat, p_cov_hat
 
@@ -205,31 +215,25 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     # 1. Update state with IMU inputs
     # - Update Position, Velocity, Orientation respectively.
     C_ns = Quaternion(*q_est[k-1]).to_mat()
-    c_term = C_ns.dot(imu_f.data[k - 1]) - g
+    c_term = C_ns.dot(imu_f.data[k - 1]) + g
     # print("Q_est={},\n mat={},\n iumu_f[k-1]={}".format(Q, Q.to_mat(),imu_f.data[k - 1]))
     # print("c_term = {}".format(c_term))
 
-    p_check = p_est[k-1] + delta_t * v_est[k-1] + ((delta_t ** 2) / 2) * c_term
+    p_check = p_est[k-1] + delta_t * v_est[k-1] + (0.5 * (delta_t ** 2)) * c_term
     v_check = v_est[k-1] + delta_t * c_term
 
-    # q_o = Quaternion(axis_angle=(imu_w.data[k-1] * delta_t))
-    # aq_v = np.array([q_o.x, q_o.y, q_o.z]).reshape(3,1)
-    # q_v_ss = skew_symmetric(aq_v)
-    # Omega = q_o.w * np.eye(4) # + np.array([[0, 0, ], [0, 0, ], [], []])
-    # print("aq_v={},\n q_v_ss={}".format(aq_v, q_v_ss))
-
-    # Omega(q(w_k-1 * delta_t)) (X) q_k-1
     # q_check = Quaternion(*q_est[k-1]).quat_mult_right(Quaternion(axis_angle=(imu_w.data[k-1] * delta_t)))
-    q_check = Quaternion(axis_angle=angle_normalize(imu_w.data[k-1] * delta_t)).quat_mult_right(Quaternion(*q_est[k-1]))
-    q_check = angle_normalize(q_check)
+    theta = angle_normalize(imu_w.data[k-1] * delta_t)
+    q_check = Quaternion(euler=theta).quat_mult_left(Quaternion(*q_est[k-1]))
+    q_check = Quaternion(euler=angle_normalize(Quaternion(*q_check).to_euler())).to_numpy()
 
     # 1.1 Linearize the motion model and compute Jacobians
     F_km1 = np.zeros((9,9))
     F_km1[0:3, 0:3] = np.eye(3)
     F_km1[0:3, 3:6] = delta_t * np.eye(3)
     F_km1[3:6, 3:6] = np.eye(3)
-    # F_km1[3:6, 6:9] = -C_ns.dot(skew_symmetric(imu_f.data[k-1].reshape(3,1)))*delta_t
-    F_km1[3:6, 6:9] = -skew_symmetric(C_ns @ imu_f.data[k-1]) * delta_t
+    # F_km1[3:6, 6:9] = -C_ns.dot(skew_symmetric(imu_f.data[k-1].reshape(3,1)))*delta_t # Huge changes in Z axis
+    F_km1[3:6, 6:9] = angle_normalize(-skew_symmetric(C_ns @ imu_f.data[k-1]) * delta_t)
     F_km1[6:, 6:] = np.eye(3)
 
     L_km1 = np.zeros((9, 6))
@@ -239,8 +243,6 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     Q_k = np.eye(6)
     Q_k[np.arange(0,3), np.arange(0,3)] = var_imu_f
     Q_k[np.arange(3,6), np.arange(3,6)] = var_imu_w
-    # Q_k[np.arange(0,3), np.arange(0,3)] = var_imu_f ** 2
-    # Q_k[np.arange(3,6), np.arange(3,6)] = var_imu_w ** 2
     Q_k = Q_k * (delta_t**2)
  
     # 2. Propagate uncertainty
@@ -257,29 +259,17 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     # if (len(gnss_data) > 0 or len(lidar_data) > 0):
     #     print("gnss_data = {}, lidar_data = {}".format(gnss_data,lidar_data))
 
-    print("p_check[{}] = {}".format(k, p_check))
     # if gnss idx or lidar idx has integer value larger than 0, it means measurement are available.
     if (len(gnss_data) > 0):
-        # y_k = gnss.data[gnss_data[0]] + (var_gnss ** 2)
-        y_k = gnss.data[gnss_data[0]] + var_gnss
-        print("gnss[{}] = {},{}".format(gnss_data[0], gnss.data[gnss_data[0]], y_k))
-        p_check, v_check, q_check, p_cov_check = measurement_update(var_gnss, p_cov_check, y_k, p_check, v_check, q_check)
-        q_check = angle_normalize(q_check)
-
+        p_check, v_check, q_check, p_cov_check = measurement_update(var_gnss, p_cov_check, gnss.data[gnss_data[0]], p_check, v_check, q_check)
     if (len(lidar_data) > 0):
-        # y_k = lidar.data[lidar_data[0]] + (var_lidar ** 2)
-        y_k = lidar.data[lidar_data[0]] + var_lidar
-        print("lidar[{}] = {}, {}".format(lidar_data[0], lidar.data[lidar_data[0]], y_k))
-        p_check, v_check, q_check, p_cov_check = measurement_update(var_lidar, p_cov_check, y_k, p_check, v_check, q_check)
-        q_check = angle_normalize(q_check)
+        p_check, v_check, q_check, p_cov_check = measurement_update(var_lidar, p_cov_check, lidar.data[lidar_data[0]], p_check, v_check, q_check)
 
     # Store current state
     p_est[k] = p_check
     v_est[k] = v_check
     q_est[k] = q_check
     p_cov[k] = p_cov_check
-
-# q_hat=Quaternion(*q_check).quat_mult_right(Quaternion(axis_angle=angle_normalize(delta_x[6:9])))
 
 #### 6. Results and Analysis ###################################################################
 
@@ -359,22 +349,22 @@ plt.show()
 ################################################################################################
 
 # Pt. 1 submission
-p1_indices = [9000, 9400, 9800, 10200, 10600]
-p1_str = ''
-for val in p1_indices:
-    for i in range(3):
-        p1_str += '%.3f ' % (p_est[val, i])
-with open('pt1_submission.txt', 'w') as file:
-    file.write(p1_str)
+# p1_indices = [9000, 9400, 9800, 10200, 10600]
+# p1_str = ''
+# for val in p1_indices:
+#     for i in range(3):
+#         p1_str += '%.3f ' % (p_est[val, i])
+# with open('pt1_submission.txt', 'w') as file:
+#     file.write(p1_str)
 
 # Pt. 2 submission
-# p2_indices = [9000, 9400, 9800, 10200, 10600]
-# p2_str = ''
-# for val in p2_indices:
-#     for i in range(3):
-#         p2_str += '%.3f ' % (p_est[val, i])
-# with open('pt2_submission.txt', 'w') as file:
-#     file.write(p2_str)
+p2_indices = [9000, 9400, 9800, 10200, 10600]
+p2_str = ''
+for val in p2_indices:
+    for i in range(3):
+        p2_str += '%.3f ' % (p_est[val, i])
+with open('pt2_submission.txt', 'w') as file:
+    file.write(p2_str)
 
 # Pt. 3 submission
 # p3_indices = [6800, 7600, 8400, 9200, 10000]
